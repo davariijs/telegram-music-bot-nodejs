@@ -1,6 +1,6 @@
 import { Telegraf, Context } from 'telegraf';
 import * as dotenv from 'dotenv';
-import { searchYouTube, downloadAndConvert } from './utils';
+import { searchYouTube, downloadAndConvert, sendFileAndCleanup } from './utils';
 import { Message } from 'telegraf/types';
 
 dotenv.config();
@@ -28,7 +28,7 @@ bot.on('text', async (ctx: Context) => {
       const videoId = results[0].id; // Use the first result
       const videoTitle = results[0].title;
 
-      ctx.reply(`Downloading and converting: ${videoTitle}`);
+      ctx.reply(`Downloading and converting, Please wait: ${videoTitle} ... `);
 
       const { filePath, error } = await downloadAndConvert(videoId);
 
@@ -39,12 +39,15 @@ bot.on('text', async (ctx: Context) => {
       }
 
       if (filePath) {
+        // Use sendFileAndCleanup to send and delete the file
+        await sendFileAndCleanup(filePath, async (filePath) => {
           try {
             await ctx.replyWithAudio({ source: filePath }, { title: videoTitle });
           } catch (sendError: any) {
             console.error('Error sending audio:', sendError);
             ctx.reply('Error sending the audio file. The file might be too large, or there was a network issue.');
           }
+        });
       }
 
 

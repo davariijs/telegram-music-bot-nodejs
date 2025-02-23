@@ -80,3 +80,22 @@ export async function getVideoTitle(videoId: string): Promise<string> {
 function sanitizeFilename(filename: string): string {
   return filename.replace(/[\\/:*?"<>|]/g, '_');
 }
+
+
+export async function sendFileAndCleanup(filePath: string, sendFunction: (filePath: string) => Promise<void>) {
+  try {
+    // Send the file using the provided sendFunction
+    await sendFunction(filePath);
+
+    // Delete the file after sending
+    fs.unlink(filePath, (err) => {
+      if (err) {
+        console.error(`Error deleting file ${filePath}:`, err);
+      } else {
+        console.log(`File ${filePath} deleted successfully.`);
+      }
+    });
+  } catch (error) {
+    console.error('Error sending file:', error);
+  }
+}
