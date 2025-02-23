@@ -17,6 +17,8 @@ type YtdlOptions =  YtFlags & {
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+const cookiesFilePath = process.env.COOKIES_FILE_PATH || '';
+
 
 export async function searchYouTube(query: string): Promise<any[]> {
     try {
@@ -45,6 +47,7 @@ export async function downloadAndConvert(videoId: string): Promise<{ filePath?: 
           output: audioFilePath,
           verbose: true,
           // cookiesFromBrowser: 'chrome',
+          // cookies: cookiesFilePath,
           cookies: path.join(__dirname, 'cookies.txt'),
           ffmpegLocation: ffmpegPath, 
       };
