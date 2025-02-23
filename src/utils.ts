@@ -1,9 +1,18 @@
-import ytdl from 'yt-dlp-exec';
+import ytdl, { YtFlags } from 'yt-dlp-exec';
 import ffmpeg from 'fluent-ffmpeg';
 import * as path from 'path';
 import * as fs from 'fs';
-import { convertCookiesToNetscape } from './netscapeFormat';
+import { exec as execCallback } from 'child_process';
+import { promisify } from 'util';
 const IYoutubeSearchApi: any = require('youtube-search-api');
+const exec = promisify(execCallback);
+
+type YtdlOptions =  YtFlags & {
+  cookiesFromBrowser?: string;
+  browserExecutablePath?: string;
+  browserProfilePath?: string;
+};
+
 
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
@@ -15,56 +24,59 @@ export async function searchYouTube(query: string): Promise<any[]> {
         return results.items;
     } catch (error) {
         console.error('Error searching YouTube:', error);
-        throw error; // Re-throw the error to be caught in index.ts
+        throw error;
     }
 }
 
 export async function downloadAndConvert(videoId: string): Promise<{ filePath?: string; error?: Error }> {
-  const outputFileName = `${videoId}.mp3`;
-  const outputFilePath = path.join(__dirname, outputFileName); // Save in the src directory (for simplicity during development)
-  const cookiesFilePath = path.join(__dirname, 'cookies.txt');
-  const jsonCookiesPath = path.join(__dirname, 'cookies.json');
-
-  // Check if the file already exists
-  if (fs.existsSync(outputFilePath)) {
-    console.log(`File already exists: ${outputFilePath}`);
-    return { filePath: outputFilePath };
+  const outputDir = path.join(__dirname, '..', 'downloads');
+  if (!fs.existsSync(outputDir)) {
+      fs.mkdirSync(outputDir, { recursive: true });
   }
 
+  const videoTitle = await getVideoTitle(videoId);
+  const sanitizedTitle = sanitizeFilename(videoTitle);
+  const audioFilePath = path.join(outputDir, `${sanitizedTitle}.mp3`);
+
+    try {
+      const options: YtdlOptions = {
+          extractAudio: true,
+          audioFormat: 'mp3',
+          output: audioFilePath,
+          verbose: true,
+          // cookiesFromBrowser: 'chrome',
+          cookies: path.join(__dirname, 'cookies.txt'),
+          ffmpegLocation: ffmpegPath, 
+      };
+
+      await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
+
+      return { filePath: audioFilePath };
+  } catch (downloadError) {
+      return { error: downloadError as Error };
+  }
+}
+
+export async function getVideoTitle(videoId: string): Promise<string> {
   try {
+      const options: YtdlOptions = {
+          dumpSingleJson: true,
+          noWarnings: true,
+          skipDownload: true,
+          verbose: true,
+          // cookiesFromBrowser: 'chrome',
+          cookies: path.join(__dirname, 'cookies.txt'),
+          ffmpegLocation: ffmpegPath, 
+      };
+      const videoInfo = await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
 
-    // Convert JSON cookies to Netscape format
-    convertCookiesToNetscape(jsonCookiesPath, cookiesFilePath);
-
-    // Convert cookies.json to Netscape format
-    if (!fs.existsSync(cookiesFilePath)) {
-      throw new Error(`Cookies file not found: ${cookiesFilePath}`);
-      }
-    
-    await ytdl(`https://www.youtube.com/watch?v=${videoId}`, {
-      extractAudio: true,
-      audioFormat: 'mp3',
-      output: outputFilePath,
-      noPlaylist: true, // Important: Only download the single video
-      limitRate: '1M', // Limit download rate to avoid getting blocked
-      cookies: cookiesFilePath,
-    });
-
-    // Clean up the temporary cookie file (IMPORTANT)
-  //   if (cookiesContent) {
-  //     fs.unlinkSync(cookiesFilePath);
-  // }
-
-//   if (fs.existsSync(cookiesFilePath)) {
-//     fs.unlinkSync(cookiesFilePath);
-// }
-
-        return { filePath: outputFilePath };
-    } catch (error: any) {
-        // Delete the incomplete file if an error occurs
-        if (fs.existsSync(outputFilePath)) {
-          fs.unlinkSync(outputFilePath);
-        }
-        return { error };
-    }
+      return videoInfo.title;
+  } catch (error) {
+      console.error('Error getting video title:', error);
+      return `video-${videoId}`; // Return a default title
+  }
+}
+// Helper function to sanitize filenames
+function sanitizeFilename(filename: string): string {
+  return filename.replace(/[\\/:*?"<>|]/g, '_');
 }

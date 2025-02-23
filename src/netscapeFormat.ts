@@ -1,25 +1,37 @@
 import * as fs from 'fs';
+import { promisify } from 'util'; // Import promisify
 
+const readFileAsync = promisify(fs.readFile);
+const writeFileAsync = promisify(fs.writeFile);
 
-export function convertCookiesToNetscape(jsonCookiesPath: string, outputFilePath: string): void {
+export async function convertCookiesToNetscape(jsonCookiesPath: string, netscapeCookiesPath: string) {
     try {
-        // Read and parse the JSON cookies file
-        const jsonCookies = fs.readFileSync(jsonCookiesPath, 'utf-8');
-        const cookies = JSON.parse(jsonCookies);
+        // Read the JSON file
+        const data = await readFileAsync(jsonCookiesPath, 'utf8');
+        const cookies = JSON.parse(data);
 
-        // Convert JSON cookies to Netscape format
+        // Convert to Netscape format
         const netscapeCookies = cookies.map((cookie: any) => {
-            const expirationDate = cookie.expirationDate
-                ? Math.floor(cookie.expirationDate) // Ensure it's an integer
-                : 0; // Default to 0 if no expirationDate is provided
+            return [
+                cookie.domain,
+                cookie.hostOnly ? 'FALSE' : 'TRUE',  // Convert boolean to string
+                cookie.path,
+                cookie.secure ? 'TRUE' : 'FALSE',   // Convert boolean to string
+                cookie.expirationDate ? Math.floor(cookie.expirationDate) : '0', // Convert to integer timestamp
+                cookie.name,
+                cookie.value
+            ].join('\t'); // Tab-separated
+        }).join('\n');   // Newline-separated
 
-            return `${cookie.domain}\t${cookie.hostOnly ? 'FALSE' : 'TRUE'}\t${cookie.path}\t${cookie.secure ? 'TRUE' : 'FALSE'}\t${expirationDate}\t${cookie.name}\t${cookie.value}`;
-        }).join('\n');
+        // Add the Netscape header
+        const netscapeHeader = `# Netscape HTTP Cookie File\n# https://curl.haxx.se/rfc/cookie_spec.html\n# This is a generated file!  Do not edit.\n\n`;
 
-        // Write the Netscape-formatted cookies to a file
-        fs.writeFileSync(outputFilePath, netscapeCookies, 'utf-8');
+        // Write to the Netscape file
+        await writeFileAsync(netscapeCookiesPath, netscapeHeader + netscapeCookies, 'utf8');
+        console.log(`Cookies converted and saved to ${netscapeCookiesPath}`);
+
     } catch (error) {
-        console.error('Error converting cookies to Netscape format:', error);
-        throw error;
+        console.error('Error converting cookies:', error);
+        throw error; // Re-throw for consistent error handling
     }
 }
