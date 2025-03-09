@@ -35,7 +35,11 @@ import {
 import { handleBroadcastMessage } from './commands/admin/broadcast';
 
 // Initialize the bot
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(BOT_TOKEN, {
+  telegram: {
+    timeout: 300000, // 5 minutes in milliseconds
+  }
+} as any);
 
 // Initialize global state
 const state: BotState = {

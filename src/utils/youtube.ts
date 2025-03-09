@@ -85,7 +85,16 @@ export async function downloadAndConvertAudio(videoId: string): Promise<Download
       verbose: true,
       cookies: COOKIES_PATH,
       ffmpegLocation: FFMPEG_PATH,
-    };
+      // Add these options to speed up downloads
+      noCheckCertificates: true,
+      preferFreeFormats: true,
+      noWarnings: true,
+      bufferSize: '16K', // Increase buffer size
+      // Limit audio quality to speed up downloads
+      audioQuality: '128K',
+      // Use specific format to avoid unnecessary format selection
+      format: 'bestaudio[ext=m4a]/bestaudio'
+    }as any;
 
     await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
     return { filePath: audioFilePath };

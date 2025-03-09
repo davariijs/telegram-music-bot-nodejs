@@ -1,4 +1,4 @@
 // handlers/index.ts
-export * from './search';
-export * from './format';
+export { handleSearch, handleVideoSelection } from './search';
+export { handleFormatSelection, handleQualitySelection } from './format';
 export * from './feedback';

@@ -1,10 +1,11 @@
 // handlers/format.ts
 import { Context, Markup } from 'telegraf';
 import { CallbackQuery } from 'telegraf/types';
-import { BotState, VideoFormat } from '../types';
+import { BotState, DownloadResult, VideoFormat } from '../types';
 import { downloadAndConvertAudio, downloadVideo, getVideoFormats } from '../utils/youtube';
-import { sendFileAndCleanup } from '../utils/file';
 import { logActivity } from '../db/users';
+import { sendFileAndCleanup } from '../utils/file';
+import * as fs from 'fs';
 
 // Type guard to check if CallbackQuery has data property
 function isDataCallbackQuery(query: CallbackQuery): query is CallbackQuery.DataQuery {
@@ -17,20 +18,25 @@ export async function handleFormatSelection(ctx: Context, state: BotState): Prom
     if (ctx.callbackQuery) {
       await ctx.answerCbQuery();
     }
-
+    
+    // Check if callback query has data
     if (!ctx.callbackQuery || !isDataCallbackQuery(ctx.callbackQuery)) {
-        return;
-      }
+      return;
+    }
     
-    const callbackData = ctx.callbackQuery?.data;
-    if (!callbackData) return;
-    
-    const match = callbackData.match(/format:(audio|video)/);
+    const callbackData = ctx.callbackQuery.data;
+    const match = callbackData.match(/format:(\w+)/);
     if (!match) return;
     
     const userId = ctx.from?.id;
     if (!userId) {
       await ctx.reply('Please start a new search.');
+      return;
+    }
+    
+    // Check if chat exists
+    if (!ctx.chat) {
+      console.error('Chat context is missing');
       return;
     }
     
@@ -40,139 +46,199 @@ export async function handleFormatSelection(ctx: Context, state: BotState): Prom
       return;
     }
     
-    const format = match[1];
-    const selectedVideoId = session.selectedVideoId;
-    const selectedVideoTitle = session.selectedVideoTitle || 'Unknown Video';
+    const format = match[1]; // 'audio' or 'video'
+    const videoId = session.selectedVideoId;
+    const videoTitle = session.selectedVideoTitle || 'Selected video';
     
     if (format === 'audio') {
-      await handleAudioDownload(ctx, userId, selectedVideoId, selectedVideoTitle);
+      // Show initial status message
+      const statusMessage = await ctx.reply(`⏳ Preparing to download audio...`);
+      
+      // Start a progress update interval
+      let dots = 0;
+      const progressInterval = setInterval(async () => {
+        dots = (dots + 1) % 4;
+        const loadingText = `⏳ Downloading audio` + '.'.repeat(dots);
+        try {
+          // Check if chat exists before using it
+          if (ctx.chat) {
+            await ctx.telegram.editMessageText(
+              ctx.chat.id,
+              statusMessage.message_id,
+              undefined,
+              loadingText
+            );
+          }
+        } catch (e) {
+          // Ignore edit conflicts
+        }
+      }, 3000);
+      
+      try {
+        // Update status
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMessage.message_id,
+          undefined,
+          '⏳ Downloading and converting to audio...'
+        );
+        
+        // Download audio
+        const result = await downloadAndConvertAudio(videoId);
+        
+        // Check for error
+        if (result.error) {
+          clearInterval(progressInterval);
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            undefined,
+            '❌ Error downloading audio: ' + result.error.message
+          );
+          return;
+        }
+        
+        // Update status
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          statusMessage.message_id,
+          undefined,
+          '✅ Audio ready! Sending...'
+        );
+        
+        // Send the audio file
+        if (result.filePath && fs.existsSync(result.filePath)) {
+          await ctx.replyWithAudio({ 
+            source: result.filePath,
+            filename: `${videoTitle}.mp3`
+          }, {
+            caption: `🎵 ${videoTitle}`
+          });
+          
+          // Delete status message after successful send
+          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+          
+          // Clean up the file
+          await sendFileAndCleanup(result.filePath, async () => {
+            // File is already sent, this is just for cleanup
+          });
+        } else {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            undefined,
+            '❌ Error: Audio file not found.'
+          );
+        }
+        
+        // Log activity
+        logActivity(userId, `download_audio`, videoTitle);
+      } catch (downloadError) {
+        console.error('Download error:', downloadError);
+        if (ctx.chat) {
+          await ctx.telegram.editMessageText(
+            ctx.chat.id,
+            statusMessage.message_id,
+            undefined,
+            '❌ Download failed. Please try again later or try another video.'
+          );
+        }
+      } finally {
+        // Make sure to clear the interval regardless of outcome
+        clearInterval(progressInterval);
+      }
     } else if (format === 'video') {
-      await handleVideoQualitySelection(ctx, userId, selectedVideoId, selectedVideoTitle, state);
+      // For video format, show quality options
+      await ctx.editMessageText('⏳ Loading available video qualities...');
+      
+      try {
+        // Get available video formats
+        const formats = await getVideoFormats(videoId);
+        
+        // Store formats in session
+        state.sessions.set(userId, {
+          ...session,
+          videoFormats: formats
+        });
+        
+        if (formats.length === 0) {
+          await ctx.editMessageText('❌ No video formats found. Please try another video.');
+          return;
+        }
+        
+        // Group formats by resolution (height)
+        const resolutionGroups = new Map<number, VideoFormat[]>();
+        
+        formats.forEach(format => {
+          if (!resolutionGroups.has(format.height)) {
+            resolutionGroups.set(format.height, []);
+          }
+          resolutionGroups.get(format.height)?.push(format);
+        });
+        
+        // Sort resolutions in descending order
+        const sortedResolutions = Array.from(resolutionGroups.keys()).sort((a, b) => b - a);
+        
+        // Create quality selection buttons
+        const qualityButtons = sortedResolutions.map(resolution => {
+          // Get the best format for this resolution (usually the one with smallest filesize)
+          const formatsForResolution = resolutionGroups.get(resolution) || [];
+          const bestFormat = formatsForResolution.sort((a, b) => 
+            (a.filesize || Infinity) - (b.filesize || Infinity)
+          )[0];
+          
+          const label = `${resolution}p ${bestFormat.format_note || ''}`.trim();
+          return [Markup.button.callback(label, `quality:video:${bestFormat.format_id}`)];
+        });
+        
+        // Add a "Best Quality" option at the top
+        qualityButtons.unshift([Markup.button.callback('🔝 Best Quality', 'quality:video:best')]);
+        
+        await ctx.editMessageText(
+          `Select video quality for: ${videoTitle}`,
+          Markup.inlineKeyboard(qualityButtons)
+        );
+        
+        // Log activity
+        logActivity(userId, 'select_video_quality', videoTitle);
+      } catch (error) {
+        console.error('Error getting video formats:', error);
+        await ctx.editMessageText('❌ Error loading video qualities. Please try again.');
+      }
     }
   } catch (error) {
     console.error('Error handling format selection:', error);
     try {
-      await ctx.reply('Something went wrong. Please try selecting another video.');
+      await ctx.reply('An error occurred. Please try again.');
     } catch (replyError) {
       console.error('Error sending message:', replyError);
     }
-  }
-}
-
-async function handleAudioDownload(ctx: Context, userId: number, videoId: string, videoTitle: string): Promise<void> {
-  await ctx.reply(`Processing your request...\nGetting audio for: ${videoTitle}`);
-  
-  try {
-    const { filePath, error } = await downloadAndConvertAudio(videoId);
-    
-    if (error) {
-      console.error('Audio download error:', error);
-      await ctx.reply('This content is unavailable. Please try another video.');
-      return;
-    }
-    
-    if (filePath) {
-      await sendFileAndCleanup(filePath, async (filePath) => {
-        try {
-          await ctx.replyWithAudio(
-            { source: filePath }, 
-            { 
-              title: videoTitle,
-              performer: 'YouTube'
-            }
-          );
-          
-          // Log successful download
-          logActivity(userId, 'download_audio', videoTitle);
-        } catch (sendError) {
-          console.error('Error sending audio:', sendError);
-          await ctx.reply('Could not send audio. The file might be too large.');
-        }
-      });
-    } else {
-      await ctx.reply('Could not process audio. Please try another video.');
-    }
-  } catch (audioError) {
-    console.error('Audio processing error:', audioError);
-    await ctx.reply('This content is unavailable. Please try another video.');
-  }
-}
-
-async function handleVideoQualitySelection(
-  ctx: Context, 
-  userId: number, 
-  videoId: string, 
-  videoTitle: string,
-  state: BotState
-): Promise<void> {
-  await ctx.reply(`Getting available video qualities for: ${videoTitle}`);
-  
-  try {
-    const formats = await getVideoFormats(videoId);
-    
-    if (!formats || formats.length === 0) {
-      await ctx.reply('No video formats available. Please try another video.');
-      return;
-    }
-    
-    // Group formats by resolution for cleaner display
-    const grouped: Record<string, VideoFormat> = {};
-    for (const format of formats) {
-      if (format.height && format.height > 0) {
-        const key = `${format.height}p`;
-        if (!grouped[key]) {
-          grouped[key] = format;
-        }
-      }
-    }
-    
-    // Sort by resolution (highest to lowest)
-    const sortedFormats = Object.values(grouped).sort((a: VideoFormat, b: VideoFormat) => b.height - a.height);
-    
-    // Create quality selection buttons
-    const qualityButtons = sortedFormats.map((format: VideoFormat) => {
-      const label = `${format.height}p`;
-      return [Markup.button.callback(label, `quality:${format.format_id}:${format.height}p`)];
-    });
-    
-    // Add a button for adaptive quality
-    qualityButtons.push([Markup.button.callback('Best Quality (Auto)', 'quality:best:auto')]);
-    
-    // Store formats in session
-    const session = state.sessions.get(userId);
-    if (session) {
-      state.sessions.set(userId, {
-        ...session,
-        videoFormats: formats
-      });
-    }
-    
-    await ctx.reply('Select video quality:', Markup.inlineKeyboard(qualityButtons));
-    
-    // Log quality selection
-    logActivity(userId, 'select_quality', videoTitle);
-  } catch (formatError) {
-    console.error('Error getting video formats:', formatError);
-    await ctx.reply('Could not retrieve video qualities. Please try another video.');
   }
 }
 
 export async function handleQualitySelection(ctx: Context, state: BotState): Promise<void> {
   try {
-    // Answer callback query immediately to prevent timeout
-    if (ctx.callbackQuery) {
-      await ctx.answerCbQuery();
+    // Check for callback query first
+    if (!ctx.callbackQuery) {
+      console.error('No callback query in context');
+      return;
     }
-
-    if (!ctx.callbackQuery || !isDataCallbackQuery(ctx.callbackQuery)) {
-        return;
-      }
     
-    const callbackData = ctx.callbackQuery?.data;
-    if (!callbackData) return;
+    // Answer callback query immediately to prevent timeout
+    await ctx.answerCbQuery();
     
-    const match = callbackData.match(/quality:(.+):(.+)/);
-    if (!match) return;
+    // Check if callback query has data
+    if (!isDataCallbackQuery(ctx.callbackQuery)) {
+      console.error('Callback query has no data');
+      return;
+    }
+    
+    const callbackData = ctx.callbackQuery.data;
+    const match = callbackData.match(/quality:(\w+):(.+)/);
+    if (!match) {
+      console.error('Invalid quality callback data format');
+      return;
+    }
     
     const userId = ctx.from?.id;
     if (!userId) {
@@ -180,67 +246,141 @@ export async function handleQualitySelection(ctx: Context, state: BotState): Pro
       return;
     }
     
-    const session = state.sessions.get(userId);
-    if (!session?.selectedVideoId) {
-      await ctx.reply('Your selection has expired. Please search again.');
+    // Check if chat and message exist
+    if (!ctx.chat || !ctx.callbackQuery.message) {
+      console.error('Chat or message context is missing');
+      if (ctx.from) {
+        // Try to send a direct message to the user if we have their ID
+        await ctx.telegram.sendMessage(userId, 'Error processing your request. Please try again.');
+      }
       return;
     }
     
-    const selectedVideoId = session.selectedVideoId;
-    const selectedVideoTitle = session.selectedVideoTitle || 'Unknown Video';
-    const formatId = match[1];
-    const qualityLabel = match[2];
+    const chatId = ctx.chat.id;
+    const messageId = ctx.callbackQuery.message.message_id;
     
-    await ctx.reply(`Processing your request...\nDownloading ${qualityLabel} video for: ${selectedVideoTitle}`);
+    const session = state.sessions.get(userId);
+    if (!session?.selectedVideoId) {
+      await ctx.telegram.sendMessage(chatId, 'Your selection has expired. Please search again.');
+      return;
+    }
+    
+    const format = match[1]; // 'video'
+    const formatId = match[2]; // format_id or 'best'
+    const videoId = session.selectedVideoId;
+    const videoTitle = session.selectedVideoTitle || 'Selected video';
+    
+    // Show initial status message
+    await ctx.telegram.editMessageText(
+      chatId,
+      messageId,
+      undefined,
+      `⏳ Preparing to download video...`
+    );
+    
+    // Start a progress update interval
+    let dots = 0;
+    const progressInterval = setInterval(async () => {
+      dots = (dots + 1) % 4;
+      const loadingText = `⏳ Downloading video` + '.'.repeat(dots);
+      try {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          loadingText
+        );
+      } catch (e) {
+        // Ignore edit conflicts
+      }
+    }, 3000);
     
     try {
-      const { filePath, error } = await downloadVideo(selectedVideoId, formatId);
+      // Download video with the selected format
+      const result = await downloadVideo(videoId, formatId);
       
-      if (error) {
-        console.error('Video download error:', error);
-        await ctx.reply('This content is unavailable. Please try another video.');
+      // Check for error
+      if (result.error) {
+        clearInterval(progressInterval);
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          '❌ Error downloading video: ' + result.error.message
+        );
         return;
       }
       
-      if (filePath) {
-        await ctx.reply('Download complete! Sending video...');
-        await sendFileAndCleanup(filePath, async (filePath) => {
-          try {
-            await ctx.replyWithVideo(
-              { source: filePath }, 
-              { caption: `${selectedVideoTitle} (${qualityLabel})` }
-            );
-            
-            // Log successful download
-            logActivity(userId, `download_video_${qualityLabel}`, selectedVideoTitle);
-          } catch (sendError) {
-            console.error('Error sending video:', sendError);
-            await ctx.reply('Could not send video. The file might be too large for Telegram (max 50MB).');
+      // Update status
+      await ctx.telegram.editMessageText(
+        chatId,
+        messageId,
+        undefined,
+        '✅ Video ready! Sending...'
+      );
+      
+      // Send the video file
+      if (result.filePath && fs.existsSync(result.filePath)) {
+        // Correct way to send video with InputFile
+        await ctx.telegram.sendVideo(
+          chatId,
+          { source: result.filePath }, // InputFile format
+          { 
+            caption: `🎬 ${videoTitle}`
+            // Note: filename is not a valid option for sendVideo extras
           }
+        );
+        
+        // Update the message after sending
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          '✅ Video sent successfully!'
+        );
+        
+        // Clean up the file
+        await sendFileAndCleanup(result.filePath, async () => {
+          // File is already sent, this is just for cleanup
         });
       } else {
-        await ctx.reply('Could not process video. Please try another video or quality.');
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          '❌ Error: Video file not found.'
+        );
       }
-    } catch (videoError) {
-      console.error('Video processing error:', videoError);
-      await ctx.reply('Error processing video. Please try another video or quality.');
-    }
-    
-    // Clear the selection after download to prevent reuse
-    if (session) {
-      state.sessions.set(userId, { 
-        ...session,
-        selectedVideoId: null,
-        selectedVideoTitle: null,
-        videoFormats: null
-      });
+      
+      // Log activity
+      logActivity(userId, `download_video_${formatId}`, videoTitle);
+    } catch (downloadError) {
+      console.error('Download error:', downloadError);
+      try {
+        await ctx.telegram.editMessageText(
+          chatId,
+          messageId,
+          undefined,
+          '❌ Download failed. Please try again later or try another video.'
+        );
+      } catch (editError) {
+        console.error('Error updating status message:', editError);
+      }
+    } finally {
+      // Make sure to clear the interval regardless of outcome
+      clearInterval(progressInterval);
     }
   } catch (error) {
     console.error('Error handling quality selection:', error);
     try {
-      await ctx.reply('Something went wrong. Please try selecting another video.');
+      // Try to send a message if we have context
+      if (ctx.chat) {
+        await ctx.telegram.sendMessage(ctx.chat.id, 'An error occurred. Please try again.');
+      } else if (ctx.from) {
+        await ctx.telegram.sendMessage(ctx.from.id, 'An error occurred. Please try again.');
+      }
     } catch (replyError) {
-      console.error('Error sending message:', replyError);
+      console.error('Error sending error message:', replyError);
     }
   }
 }
