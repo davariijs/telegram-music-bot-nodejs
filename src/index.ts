@@ -37,7 +37,8 @@ import { handleBroadcastMessage } from './commands/admin/broadcast';
 // Initialize the bot
 const bot = new Telegraf(BOT_TOKEN, {
   telegram: {
-    timeout: 300000, // 5 minutes in milliseconds
+    apiRoot: 'https://api.telegram.org',
+    timeout: 500000, // 500 seconds
   }
 } as any);
 

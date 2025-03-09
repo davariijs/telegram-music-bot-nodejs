@@ -2,7 +2,7 @@
 import { Context, Markup } from 'telegraf';
 import { CallbackQuery } from 'telegraf/types';
 import { BotState, DownloadResult, VideoFormat } from '../types';
-import { downloadAndConvertAudio, downloadVideo, getVideoFormats } from '../utils/youtube';
+import { downloadAndConvertAudio, downloadVideo, getVideoFormats , getFileSizeInMB} from '../utils/youtube';
 import { logActivity } from '../db/users';
 import { sendFileAndCleanup } from '../utils/file';
 import * as fs from 'fs';
@@ -107,29 +107,76 @@ export async function handleFormatSelection(ctx: Context, state: BotState): Prom
         );
         
         // Send the audio file
-        if (result.filePath && fs.existsSync(result.filePath)) {
-          await ctx.replyWithAudio({ 
-            source: result.filePath,
-            filename: `${videoTitle}.mp3`
-          }, {
-            caption: `🎵 ${videoTitle}`
-          });
-          
-          // Delete status message after successful send
-          await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
-          
-          // Clean up the file
-          await sendFileAndCleanup(result.filePath, async () => {
-            // File is already sent, this is just for cleanup
-          });
-        } else {
-          await ctx.telegram.editMessageText(
-            ctx.chat.id,
-            statusMessage.message_id,
-            undefined,
-            '❌ Error: Audio file not found.'
-          );
-        }
+        // Send the audio file
+if (result.filePath && fs.existsSync(result.filePath)) {
+  const fileSizeMB = getFileSizeInMB(result.filePath);
+  
+  // Update status with file size info
+  await ctx.telegram.editMessageText(
+    ctx.chat.id,
+    statusMessage.message_id,
+    undefined,
+    `✅ Audio ready! Sending... (${fileSizeMB.toFixed(1)}MB)`
+  );
+  
+  // For very large files, warn the user it might take time
+  if (fileSizeMB > 20) {
+    await ctx.telegram.sendMessage(
+      ctx.chat.id,
+      `⚠️ This is a large file (${fileSizeMB.toFixed(1)}MB). It may take some time to upload.`
+    );
+  }
+  
+  try {
+    // Use a longer timeout for sending large files
+    await ctx.telegram.sendAudio(
+      ctx.chat.id,
+      { source: result.filePath },
+      { caption: `🎵 ${videoTitle}` }
+    );
+    
+    // Delete status message after successful send
+    await ctx.telegram.deleteMessage(ctx.chat.id, statusMessage.message_id);
+  } catch (sendError: any) {
+    console.error('Error sending audio:', sendError);
+    
+    if (sendError.message && sendError.message.includes('413')) {
+      // Handle "Request Entity Too Large" error
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessage.message_id,
+        undefined,
+        `❌ Error: File is too large for Telegram (${fileSizeMB.toFixed(1)}MB). Telegram has a 50MB limit.`
+      );
+    } else if (sendError.message && sendError.message.includes('timeout')) {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessage.message_id,
+        undefined,
+        `❌ Timeout while uploading. The file (${fileSizeMB.toFixed(1)}MB) may be too large.`
+      );
+    } else {
+      await ctx.telegram.editMessageText(
+        ctx.chat.id,
+        statusMessage.message_id,
+        undefined,
+        '❌ Error sending audio: ' + sendError.message
+      );
+    }
+  }
+  
+  // Clean up the file regardless of whether sending succeeded
+  await sendFileAndCleanup(result.filePath, async () => {
+    // File is already sent or failed to send, this is just for cleanup
+  });
+} else {
+  await ctx.telegram.editMessageText(
+    ctx.chat.id,
+    statusMessage.message_id,
+    undefined,
+    '❌ Error: Audio file not found.'
+  );
+}
         
         // Log activity
         logActivity(userId, `download_audio`, videoTitle);
