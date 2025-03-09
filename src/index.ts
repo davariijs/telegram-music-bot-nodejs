@@ -140,22 +140,51 @@ bot.use((ctx, next) => {
   return next();
 });
 
-// Start command handler
+// Start command handler with admin detection
 bot.start((ctx) => {
-  ctx.reply(
-    'Welcome! I can help you download music and videos from YouTube.\n\n' +
+  const isAdmin = ctx.from?.id === ADMIN_ID;
+  
+  let welcomeMessage = 'Welcome! I can help you download music and videos from YouTube.\n\n' +
     'Just send me a song name or artist to search, or use these commands:\n' +
     '/search - Search for videos\n' +
     '/feedback - Send feedback or report issues\n' +
-    '/help - Show help information'
-  );
+    '/help - Show help information';
+  
+  // Add admin commands if the user is an admin
+  if (isAdmin) {
+    welcomeMessage += '\n\n' +
+      '🔐 <b>Admin Commands:</b>\n' +
+      '/stats - View bot statistics\n' +
+      '/feedback_list - See pending feedback\n' +
+      '/reply [ID] [message] - Reply to feedback\n' +
+      '/broadcast - Send message to all users';
+      
+    ctx.reply(welcomeMessage, { parse_mode: 'HTML' });
+  } else {
+    ctx.reply(welcomeMessage);
+  }
+  
+  // Log the start event
+  try {
+    if (ctx.from) {
+      const now = new Date().toISOString();
+      const logActivity = db.prepare(`
+        INSERT INTO user_activity (user_id, activity_type, search_query, timestamp)
+        VALUES (?, ?, ?, ?)
+      `);
+      logActivity.run(ctx.from.id, 'start_command', '', now);
+    }
+  } catch (error) {
+    console.error('Error logging start command:', error);
+  }
 });
 
 // Help command
 bot.command('help', (ctx) => {
-  ctx.reply(
-    '🎵 <b>YouTube Downloader Bot Help</b> 🎵\n\n' +
-    '<b>Commands:</b>\n' +
+  const isAdmin = ctx.from?.id === ADMIN_ID;
+  
+  let helpMessage = '🎵 <b>YouTube Downloader Bot Help</b> 🎵\n\n' +
+    '<b>User Commands:</b>\n' +
     '• Simply type any song or video name to search\n' +
     '• /search - Search for videos\n' +
     '• /feedback - Send feedback or report issues\n' +
@@ -166,9 +195,20 @@ bot.command('help', (ctx) => {
     '3. Choose audio or video format\n' +
     '4. For videos, select quality\n' +
     '5. Wait for download to complete\n\n' +
-    'If you encounter any issues, use /feedback to report them!',
-    { parse_mode: 'HTML' }
-  );
+    'If you encounter any issues, use /feedback to report them!';
+  
+  if (isAdmin) {
+    helpMessage += '\n\n' +
+      '🔐 <b>Admin Commands:</b>\n' +
+      '• /stats - View bot usage statistics\n' +
+      '• /feedback_list - See pending user feedback\n' +
+      '• /reply [ID] [message] - Reply to user feedback\n' +
+      '• /broadcast - Send announcement to all users\n\n' +
+      '<b>Reply format:</b>\n' +
+      '/reply 5 Thanks for your feedback!';
+  }
+  
+  ctx.reply(helpMessage, { parse_mode: 'HTML' });
 });
 
 // Cancel command - resets any ongoing operation
@@ -193,6 +233,102 @@ bot.command('feedback', (ctx) => {
       'Your message will be sent to the bot administrator.\n\n' +
       'Type /cancel to cancel.'
     );
+  }
+});
+
+
+// Admin broadcast command state
+const broadcastState = new Map();
+
+// Command to broadcast a message to all users
+bot.command('broadcast', async (ctx) => {
+  if (ctx.from?.id === ADMIN_ID) {
+    broadcastState.set(ADMIN_ID, 'awaiting_message');
+    await ctx.reply(
+      '📣 <b>Broadcast Message</b>\n\n' +
+      'Please type the message you want to broadcast to all users.\n' +
+      'The message will be sent to everyone who has used the bot.\n\n' +
+      'Type /cancel to cancel the broadcast.',
+      { parse_mode: 'HTML' }
+    );
+  }
+});
+
+// Update the text handler to handle broadcast messages
+bot.on('text', async (ctx) => {
+  try {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    
+    const messageText = ctx.message.text;
+    
+    // Skip if message starts with / (potential command)
+    if (messageText.startsWith('/')) {
+      // Command handling code...
+      return;
+    }
+    
+    // Check if admin is in broadcast mode
+    if (userId === ADMIN_ID && broadcastState.get(ADMIN_ID) === 'awaiting_message') {
+      const broadcastMessage = messageText;
+      
+      await ctx.reply('⏳ <b>Broadcasting message to all users...</b>', { parse_mode: 'HTML' });
+      
+      try {
+        // Get all users
+        const users = db.prepare('SELECT id FROM users').all() as { id: number }[];
+        
+        let sentCount = 0;
+        let failedCount = 0;
+        
+        // Send to each user
+        for (const user of users) {
+          try {
+            // Don't send to the admin themselves
+            if (user.id !== ADMIN_ID) {
+              await bot.telegram.sendMessage(
+                user.id,
+                `📢 <b>Announcement from Bot Admin:</b>\n\n${escapeHTML(broadcastMessage)}`,
+                { parse_mode: 'HTML' }
+              );
+              sentCount++;
+            }
+            // Add a small delay to avoid hitting Telegram's rate limits
+            await new Promise(resolve => setTimeout(resolve, 50));
+          } catch (sendError) {
+            console.error(`Failed to send broadcast to user ${user.id}:`, sendError);
+            failedCount++;
+          }
+        }
+        
+        // Reset broadcast state
+        broadcastState.delete(ADMIN_ID);
+        
+        await ctx.reply(
+          `✅ <b>Broadcast Complete</b>\n\n` +
+          `Message sent to ${sentCount} users\n` +
+          `Failed to send to ${failedCount} users`,
+          { parse_mode: 'HTML' }
+        );
+      } catch (dbError) {
+        console.error('Error getting users for broadcast:', dbError);
+        await ctx.reply('Error retrieving user list for broadcast.');
+      }
+      
+      return;
+    }
+    
+    // Check if user is in feedback mode
+    if (feedbackState.get(userId) === 'awaiting_feedback') {
+      // Feedback handling code...
+      return;
+    }
+    
+    // Handle as a search query
+    // Search handling code...
+  } catch (error) {
+    console.error('Error handling text message:', error);
+    await ctx.reply('An unexpected error occurred. Please try again.');
   }
 });
 
