@@ -14,6 +14,17 @@ type YtdlOptions = YtFlags & {
   browserProfilePath?: string;
 };
 
+export interface VideoFormat {
+  format_id: string;
+  height: number;
+  width?: number;
+  vcodec?: string;
+  acodec?: string;
+  filesize?: number;
+  format_note?: string;
+  ext?: string;
+}
+
 const ffmpegPath = require('@ffmpeg-installer/ffmpeg').path;
 ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -56,32 +67,6 @@ export async function downloadAndConvertAudio(videoId: string): Promise<{ filePa
   }
 }
 
-// New function to download video
-export async function downloadVideo(videoId: string): Promise<{ filePath?: string; error?: Error }> {
-  const outputDir = path.join(__dirname, '..', 'downloads');
-  if (!fs.existsSync(outputDir)) {
-    fs.mkdirSync(outputDir, { recursive: true });
-  }
-
-  const videoTitle = await getVideoTitle(videoId);
-  const sanitizedTitle = sanitizeFilename(videoTitle);
-  const videoFilePath = path.join(outputDir, `${sanitizedTitle}.mp4`);
-
-  try {
-    const options: YtdlOptions = {
-      format: 'best[ext=mp4]/best',
-      output: videoFilePath,
-      verbose: true,
-      cookies: path.join(__dirname, 'cookies.txt'),
-      ffmpegLocation: ffmpegPath,
-    };
-
-    await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
-    return { filePath: videoFilePath };
-  } catch (downloadError) {
-    return { error: downloadError as Error };
-  }
-}
 
 export async function getVideoTitle(videoId: string): Promise<string> {
   try {
@@ -98,6 +83,67 @@ export async function getVideoTitle(videoId: string): Promise<string> {
   } catch (error) {
     console.error('Error getting video title:', error);
     return `video-${videoId}`;
+  }
+}
+
+// Add to your utils.ts
+
+// Get available video formats
+export async function getVideoFormats(videoId: string): Promise<VideoFormat[]> {
+  try {
+    const options: YtdlOptions = {
+      dumpSingleJson: true,
+      noWarnings: true,
+      skipDownload: true,
+      verbose: true,
+      cookies: path.join(__dirname, 'cookies.txt'),
+      ffmpegLocation: ffmpegPath,
+    };
+    
+    const videoInfo = await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
+    
+    // Filter for formats that have both video and audio, or just video formats with reasonable sizes
+    const formats = videoInfo.formats.filter((format: any) => 
+      (format.vcodec !== 'none' && format.height > 0) // Has video
+    ) as VideoFormat[];
+    
+    return formats;
+  } catch (error) {
+    console.error('Error getting video formats:', error);
+    return [];
+  }
+}
+
+// Update the downloadVideo function to accept formatId
+export async function downloadVideo(videoId: string, formatId: string = 'best'): Promise<{ filePath?: string; error?: Error }> {
+  const outputDir = path.join(__dirname, '..', 'downloads');
+  if (!fs.existsSync(outputDir)) {
+    fs.mkdirSync(outputDir, { recursive: true });
+  }
+
+  const videoTitle = await getVideoTitle(videoId);
+  const sanitizedTitle = sanitizeFilename(videoTitle);
+  const videoFilePath = path.join(outputDir, `${sanitizedTitle}.mp4`);
+
+  try {
+    const options: YtdlOptions = {
+      output: videoFilePath,
+      verbose: true,
+      cookies: path.join(__dirname, 'cookies.txt'),
+      ffmpegLocation: ffmpegPath,
+    };
+
+    // If a specific format is requested, use it
+    if (formatId !== 'best') {
+      options.format = formatId;
+    } else {
+      options.format = 'best[ext=mp4]/best';
+    }
+
+    await ytdl(`https://www.youtube.com/watch?v=${videoId}`, options);
+    return { filePath: videoFilePath };
+  } catch (downloadError) {
+    return { error: downloadError as Error };
   }
 }
 

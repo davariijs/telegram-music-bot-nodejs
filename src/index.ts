@@ -1,25 +1,34 @@
 import { Telegraf, Context, Markup } from 'telegraf';
 import * as dotenv from 'dotenv';
-import { searchYouTube, downloadAndConvertAudio, downloadVideo, sendFileAndCleanup } from './utils';
+import { searchYouTube, downloadAndConvertAudio, downloadVideo, getVideoFormats, sendFileAndCleanup } from './utils';
 import { Message } from 'telegraf/types';
 import Database from 'better-sqlite3';
 import * as path from 'path';
 
 dotenv.config();
 
-
-interface CountResult {
-  count: number;
+interface VideoFormat {
+  format_id: string;
+  height: number;
+  width?: number;
+  vcodec?: string;
+  acodec?: string;
+  filesize?: number;
+  format_note?: string;
+  ext?: string;
 }
 
-interface SearchResult {
-  search_query: string;
-  count: number;
+function escapeHTML(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
+
 // Initialize the bot with token
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN || '');
 
-// Initialize database for user tracking
+// Initialize database for user tracking and feedback
 const dbPath = path.join(__dirname, '..', 'bot_stats.db');
 const db = new Database(dbPath);
 
@@ -41,13 +50,53 @@ db.exec(`
     timestamp TEXT,
     FOREIGN KEY (user_id) REFERENCES users (id)
   );
+  
+  CREATE TABLE IF NOT EXISTS feedback (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,
+    message TEXT,
+    timestamp TEXT,
+    status TEXT DEFAULT 'pending',
+    FOREIGN KEY (user_id) REFERENCES users (id)
+  );
+  
+  CREATE TABLE IF NOT EXISTS feedback_replies (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feedback_id INTEGER,
+    reply TEXT,
+    timestamp TEXT,
+    FOREIGN KEY (feedback_id) REFERENCES feedback (id)
+  );
 `);
 
 // Set your admin Telegram ID - replace with your actual ID
 const ADMIN_ID = parseInt(process.env.ADMIN_ID || '0');
 
+// Interfaces for database results
+interface CountResult {
+  count: number;
+}
+
+interface SearchResult {
+  search_query: string;
+  count: number;
+}
+
+interface FeedbackMessage {
+  id: number;
+  user_id: number;
+  message: string;
+  timestamp: string;
+  status: string;
+  first_name?: string;
+  username?: string;
+}
+
 // Simple in-memory session storage - stores user search results and selections
 const sessions = new Map();
+
+// Feedback command state
+const feedbackState = new Map();
 
 // Middleware to track users
 bot.use((ctx, next) => {
@@ -91,6 +140,62 @@ bot.use((ctx, next) => {
   return next();
 });
 
+// Start command handler
+bot.start((ctx) => {
+  ctx.reply(
+    'Welcome! I can help you download music and videos from YouTube.\n\n' +
+    'Just send me a song name or artist to search, or use these commands:\n' +
+    '/search - Search for videos\n' +
+    '/feedback - Send feedback or report issues\n' +
+    '/help - Show help information'
+  );
+});
+
+// Help command
+bot.command('help', (ctx) => {
+  ctx.reply(
+    '🎵 <b>YouTube Downloader Bot Help</b> 🎵\n\n' +
+    '<b>Commands:</b>\n' +
+    '• Simply type any song or video name to search\n' +
+    '• /search - Search for videos\n' +
+    '• /feedback - Send feedback or report issues\n' +
+    '• /cancel - Cancel current operation\n\n' +
+    '<b>How to use:</b>\n' +
+    '1. Search for a video by name\n' +
+    '2. Select from search results\n' +
+    '3. Choose audio or video format\n' +
+    '4. For videos, select quality\n' +
+    '5. Wait for download to complete\n\n' +
+    'If you encounter any issues, use /feedback to report them!',
+    { parse_mode: 'HTML' }
+  );
+});
+
+// Cancel command - resets any ongoing operation
+bot.command('cancel', (ctx) => {
+  const userId = ctx.from?.id;
+  if (userId) {
+    // Clear any pending feedback state
+    feedbackState.delete(userId);
+    // Clear any session data
+    sessions.delete(userId);
+  }
+  ctx.reply('Current operation canceled. You can start a new search or use other commands.');
+});
+
+// Feedback command - let users send messages to admin
+bot.command('feedback', (ctx) => {
+  const userId = ctx.from?.id;
+  if (userId) {
+    feedbackState.set(userId, 'awaiting_feedback');
+    ctx.reply(
+      'Please share your feedback, suggestion, or report a problem. ' +
+      'Your message will be sent to the bot administrator.\n\n' +
+      'Type /cancel to cancel.'
+    );
+  }
+});
+
 // Admin command for stats
 bot.command('stats', async (ctx) => {
   if (ctx.from?.id === ADMIN_ID) {
@@ -114,23 +219,30 @@ bot.command('stats', async (ctx) => {
       const popularSearches = db.prepare(`
         SELECT search_query, COUNT(*) as count 
         FROM user_activity 
-        WHERE search_query != '' 
+        WHERE search_query != '' AND search_query NOT LIKE '/%'
         GROUP BY search_query 
         ORDER BY count DESC 
         LIMIT 5
       `).all() as SearchResult[];
       
+      // Pending feedback count
+      const pendingFeedback = db.prepare(`
+        SELECT COUNT(*) as count FROM feedback WHERE status = 'pending'
+      `).get() as CountResult;
+      
       let searchesText = popularSearches.length > 0 
         ? popularSearches.map(s => `"${s.search_query}" (${s.count})`).join('\n')
         : 'No searches yet';
       
-      await ctx.reply(
-        `📊 Bot Statistics:\n\n` +
-        `Total Users: ${totalUsers.count}\n` +
-        `Active Today: ${activeToday.count}\n` +
-        `Active This Week: ${activeWeek.count}\n\n` +
-        `Top Searches:\n${searchesText}`
-      );
+        await ctx.reply(
+          `📊 <b>Bot Statistics:</b>\n\n` +
+          `Total Users: ${totalUsers.count}\n` +
+          `Active Today: ${activeToday.count}\n` +
+          `Active This Week: ${activeWeek.count}\n\n` +
+          `Pending Feedback: ${pendingFeedback.count}\n\n` +
+          `<b>Top Searches:</b>\n${searchesText}`,
+          { parse_mode: 'HTML' }
+        );
     } catch (error) {
       console.error('Error getting stats:', error);
       await ctx.reply('Error retrieving statistics');
@@ -141,19 +253,165 @@ bot.command('stats', async (ctx) => {
   }
 });
 
-// Start command handler
-bot.start((ctx) => {
-  ctx.reply('Welcome! Send me a song name or artist to search for audio or video content.');
+// Admin command to view pending feedback
+bot.command('feedback_list', async (ctx) => {
+  if (ctx.from?.id === ADMIN_ID) {
+    try {
+      const pendingFeedback = db.prepare(`
+        SELECT f.id, f.user_id, f.message, f.timestamp, f.status, u.first_name, u.username
+        FROM feedback f
+        JOIN users u ON f.user_id = u.id
+        WHERE f.status = 'pending'
+        ORDER BY f.timestamp DESC
+        LIMIT 10
+      `).all() as FeedbackMessage[];
+      
+      if (pendingFeedback.length === 0) {
+        await ctx.reply('No pending feedback messages.');
+        return;
+      }
+      
+      for (const feedback of pendingFeedback) {
+        const userInfo = feedback.username 
+          ? `@${feedback.username}` 
+          : feedback.first_name || `User ${feedback.user_id}`;
+        
+          await ctx.reply(
+            `📩 <b>Feedback #${feedback.id}</b>\n` +
+            `From: ${userInfo} (ID: ${feedback.user_id})\n` +
+            `Time: ${new Date(feedback.timestamp).toLocaleString()}\n\n` +
+            `${escapeHTML(feedback.message)}\n\n` +
+            `To reply, use: /reply ${feedback.id} YOUR_REPLY`,
+            { parse_mode: 'HTML' }
+          );
+      }
+    } catch (error) {
+      console.error('Error retrieving feedback:', error);
+      await ctx.reply('Error retrieving feedback messages');
+    }
+  }
 });
 
-// Handle text messages (search queries)
+// Admin command to reply to feedback - use regex to match the entire command
+bot.hears(/^\/reply\s+(\d+)\s+(.+)$/i, async (ctx) => {
+  if (ctx.from?.id === ADMIN_ID) {
+    try {
+      const feedbackId = parseInt(ctx.match[1]);
+      const replyText = ctx.match[2];
+      
+      // Get the feedback message and user
+      const feedback = db.prepare(`
+        SELECT id, user_id, message FROM feedback WHERE id = ?
+      `).get(feedbackId) as FeedbackMessage | undefined;
+      
+      if (!feedback) {
+        await ctx.reply(`Feedback #${feedbackId} not found.`);
+        return;
+      }
+      
+      // Save the reply
+      const now = new Date().toISOString();
+      const insertReply = db.prepare(`
+        INSERT INTO feedback_replies (feedback_id, reply, timestamp)
+        VALUES (?, ?, ?)
+      `);
+      insertReply.run(feedbackId, replyText, now);
+      
+      // Update feedback status
+      const updateStatus = db.prepare(`
+        UPDATE feedback SET status = 'replied' WHERE id = ?
+      `);
+      updateStatus.run(feedbackId);
+      
+      // Send reply to the user
+      await bot.telegram.sendMessage(
+        feedback.user_id,
+        `📬 <b>Reply from admin regarding your feedback:</b>\n\n` +
+        `Your message: "${escapeHTML(feedback.message)}"\n\n` +
+        `Admin's reply: "${escapeHTML(replyText)}"\n\n` +
+        `Use /feedback to send another message if needed.`,
+        { parse_mode: 'HTML' }
+      );
+      
+      await ctx.reply(`Reply sent to user ${feedback.user_id} for feedback #${feedbackId}`);
+    } catch (error) {
+      console.error('Error replying to feedback:', error);
+      await ctx.reply('Error sending reply. Please try again.');
+    }
+  }
+});
+
+// Also add a simple handler for just "/reply" to show usage
+bot.command('reply', (ctx) => {
+  if (ctx.from?.id === ADMIN_ID) {
+    ctx.reply(
+      "To reply to feedback, use the format:\n" +
+      "/reply [ID] [your message]\n\n" +
+      "Example: /reply 5 Thanks for your feedback!"
+    );
+  }
+});
+
+// Search command
+bot.command('search', (ctx) => {
+  ctx.reply('Please enter the name of the song or video you want to search for:');
+});
+
+// Handle text messages (search queries or feedback)
 bot.on('text', async (ctx) => {
   try {
+    const userId = ctx.from?.id;
+    if (!userId) return;
+    
+    // Check if user is in feedback mode
+    if (feedbackState.get(userId) === 'awaiting_feedback') {
+      const feedbackText = ctx.message.text;
+      
+      // Store feedback in database
+      try {
+        const now = new Date().toISOString();
+        const insertFeedback = db.prepare(`
+          INSERT INTO feedback (user_id, message, timestamp)
+          VALUES (?, ?, ?)
+        `);
+        insertFeedback.run(userId, feedbackText, now);
+        
+        // Notify admin if configured
+        if (ADMIN_ID) {
+          const userInfo = ctx.from.username 
+            ? `@${ctx.from.username}` 
+            : ctx.from.first_name || `User ${userId}`;
+            
+            await bot.telegram.sendMessage(
+              ADMIN_ID,
+              `📩 <b>New Feedback Received</b>\n` +
+              `From: ${userInfo} (ID: ${userId})\n\n` +
+              `${escapeHTML(feedbackText)}\n\n` +
+              `Use /feedback_list to see all pending feedback.`,
+              { parse_mode: 'HTML' }
+            );
+        }
+        
+        await ctx.reply(
+          'Thank you for your feedback! The administrator will review it soon.\n' +
+          'You can continue using the bot normally now.'
+        );
+      } catch (dbError) {
+        console.error('Error saving feedback:', dbError);
+        await ctx.reply('Error saving your feedback. Please try again later.');
+      }
+      
+      // Reset feedback state
+      feedbackState.delete(userId);
+      return;
+    }
+    
+    // Handle as a search query
     const message = ctx.message as Message.TextMessage;
     if (!message) return;
     
     const query = message.text;
-    const statusMessage = await ctx.reply(`Searching for "${query}"...`);
+    await ctx.reply(`Searching for "${query}"...`);
 
     try {
       const results = await searchYouTube(query);
@@ -164,7 +422,6 @@ bot.on('text', async (ctx) => {
       }
 
       // Store search results in session
-      const userId = ctx.from.id;
       sessions.set(userId, { 
         searchResults: results.slice(0, 10),
         lastSearchQuery: query
@@ -263,17 +520,15 @@ bot.action(/format:(audio|video)/, async (ctx) => {
     const format = ctx.match[1];
     const { selectedVideoId, selectedVideoTitle } = session;
     
-    // Let user know processing has started
-    const processingMsg = await ctx.reply(`Processing your request...\nGetting ${format} for: ${selectedVideoTitle}`);
-    
     if (format === 'audio') {
+      // For audio, directly start download
+      await ctx.reply(`Processing your request...\nGetting audio for: ${selectedVideoTitle}`);
+      
       try {
         const { filePath, error } = await downloadAndConvertAudio(selectedVideoId);
         
         if (error) {
           console.error('Audio download error:', error);
-          
-          // Don't show technical error to user, just a friendly message
           await ctx.reply('This content is unavailable. Please try another video.');
           return;
         }
@@ -315,63 +570,141 @@ bot.action(/format:(audio|video)/, async (ctx) => {
         await ctx.reply('This content is unavailable. Please try another video.');
       }
     } else if (format === 'video') {
+      // For video, get available qualities first
+      await ctx.reply(`Getting available video qualities for: ${selectedVideoTitle}`);
+      
       try {
-        const { filePath, error } = await downloadVideo(selectedVideoId);
+        const formats = await getVideoFormats(selectedVideoId);
         
-        if (error) {
-          console.error('Video download error:', error);
-          
-          // Don't show technical error to user, just a friendly message
-          await ctx.reply('This content is unavailable. Please try another video.');
+        if (!formats || formats.length === 0) {
+          await ctx.reply('No video formats available. Please try another video.');
           return;
         }
         
-        if (filePath) {
-          await sendFileAndCleanup(filePath, async (filePath) => {
-            try {
-              await ctx.replyWithVideo(
-                { source: filePath }, 
-                { caption: selectedVideoTitle }
-              );
-              
-              // Log successful download in database
-              if (userId) {
-                try {
-                  const now = new Date().toISOString();
-                  const logDownload = db.prepare(`
-                    INSERT INTO user_activity (user_id, activity_type, search_query, timestamp)
-                    VALUES (?, ?, ?, ?)
-                  `);
-                  logDownload.run(userId, 'download_video', selectedVideoTitle, now);
-                } catch (dbError) {
-                  console.error('Error logging download:', dbError);
-                }
-              }
-            } catch (sendError) {
-              console.error('Error sending video:', sendError);
-              await ctx.reply('Could not send video. The file might be too large.');
+        // Group formats by resolution for cleaner display
+        const grouped: Record<string, VideoFormat> = {};
+        for (const format of formats as VideoFormat[]) {
+          if (format.height && format.height > 0) {
+            const key = `${format.height}p`;
+            if (!grouped[key]) {
+              grouped[key] = format;
             }
-          });
-        } else {
-          await ctx.reply('Could not process video. Please try another video.');
+          }
         }
-      } catch (videoError) {
-        console.error('Video processing error:', videoError);
-        await ctx.reply('This content is unavailable. Please try another video.');
+        
+        // Sort by resolution (highest to lowest)
+        const sortedFormats = Object.values(grouped).sort((a, b) => b.height - a.height);
+        
+        // Create quality selection buttons
+        const qualityButtons = sortedFormats.map(format => {
+          const label = `${format.height}p`;
+          return [Markup.button.callback(label, `quality:${format.format_id}:${format.height}p`)];
+        });
+        
+        // Add a button for adaptive quality
+        qualityButtons.push([Markup.button.callback('Best Quality (Auto)', 'quality:best:auto')]);
+        
+        // Store formats in session
+        sessions.set(userId, {
+          ...session,
+          videoFormats: formats
+        });
+        
+        await ctx.reply('Select video quality:', Markup.inlineKeyboard(qualityButtons));
+      } catch (formatError) {
+        console.error('Error getting video formats:', formatError);
+        await ctx.reply('Could not retrieve video qualities. Please try another video.');
       }
-    } else {
-      await ctx.reply('Invalid format selected. Please try again.');
+    }
+    
+  } catch (error) {
+    console.error('Error handling format selection:', error);
+    try {
+      await ctx.reply('Something went wrong. Please try selecting another video.');
+    } catch (replyError) {
+      console.error('Error sending message:', replyError);
+    }
+  }
+});
+
+// Handle quality selection
+bot.action(/quality:(.+):(.+)/, async (ctx) => {
+  try {
+    // Answer callback query immediately to prevent timeout
+    await ctx.answerCbQuery();
+    
+    const userId = ctx.from?.id;
+    if (!userId) {
+      await ctx.reply('Please start a new search.');
+      return;
+    }
+    
+    const session = sessions.get(userId);
+    if (!session?.selectedVideoId) {
+      await ctx.reply('Your selection has expired. Please search again.');
+      return;
+    }
+    
+    const { selectedVideoId, selectedVideoTitle } = session;
+    const formatId = ctx.match[1];
+    const qualityLabel = ctx.match[2];
+    
+    await ctx.reply(`Processing your request...\nDownloading ${qualityLabel} video for: ${selectedVideoTitle}`);
+    
+    try {
+      const { filePath, error } = await downloadVideo(selectedVideoId, formatId);
+      
+      if (error) {
+        console.error('Video download error:', error);
+        await ctx.reply('This content is unavailable. Please try another video.');
+        return;
+      }
+      
+      if (filePath) {
+        await ctx.reply('Download complete! Sending video...');
+        await sendFileAndCleanup(filePath, async (filePath) => {
+          try {
+            await ctx.replyWithVideo(
+              { source: filePath }, 
+              { caption: `${selectedVideoTitle} (${qualityLabel})` }
+            );
+            
+            // Log successful download in database
+            if (userId) {
+              try {
+                const now = new Date().toISOString();
+                const logDownload = db.prepare(`
+                  INSERT INTO user_activity (user_id, activity_type, search_query, timestamp)
+                  VALUES (?, ?, ?, ?)
+                `);
+                logDownload.run(userId, `download_video_${qualityLabel}`, selectedVideoTitle, now);
+              } catch (dbError) {
+                console.error('Error logging download:', dbError);
+              }
+            }
+          } catch (sendError) {
+            console.error('Error sending video:', sendError);
+            await ctx.reply('Could not send video. The file might be too large for Telegram (max 50MB).');
+          }
+        });
+      } else {
+        await ctx.reply('Could not process video. Please try another video or quality.');
+      }
+    } catch (videoError) {
+      console.error('Video processing error:', videoError);
+      await ctx.reply('Error processing video. Please try another video or quality.');
     }
     
     // Clear the selection after download to prevent reuse
     sessions.set(userId, { 
       ...session,
       selectedVideoId: null,
-      selectedVideoTitle: null 
+      selectedVideoTitle: null,
+      videoFormats: null
     });
     
   } catch (error) {
-    console.error('Error handling format selection:', error);
+    console.error('Error handling quality selection:', error);
     try {
       await ctx.reply('Something went wrong. Please try selecting another video.');
     } catch (replyError) {
@@ -401,7 +734,7 @@ process.once('SIGTERM', () => {
 
 // Launch the bot
 bot.launch().then(() => {
-  console.log('Bot is running with user tracking enabled!');
+  console.log('Bot is running with user tracking and feedback system enabled!');
 }).catch(err => {
   console.error('Failed to start bot:', err);
 });
