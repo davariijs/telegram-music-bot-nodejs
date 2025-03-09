@@ -36,9 +36,12 @@ import { handleBroadcastMessage } from './commands/admin/broadcast';
 
 // Initialize the bot
 const bot = new Telegraf(BOT_TOKEN, {
+  // Set handlerTimeout to 30 minutes (plenty of time for large uploads)
+  handlerTimeout: 1800000,
+  
   telegram: {
-    apiRoot: 'https://api.telegram.org',
-    timeout: 500000, // 500 seconds
+    // API request timeout (different from handler timeout)
+    timeout: 600000 // 10 minutes
   }
 } as any);
 
