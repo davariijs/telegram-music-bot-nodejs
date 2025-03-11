@@ -1,4 +1,3 @@
-// handlers/format.ts
 import { Context, Markup } from 'telegraf';
 import { CallbackQuery } from 'telegraf/types';
 import { BotState, DownloadResult, VideoFormat } from '../types';

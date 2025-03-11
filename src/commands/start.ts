@@ -1,4 +1,3 @@
-// commands/start.ts
 import { Context } from 'telegraf';
 import { ADMIN_ID } from '../config';
 import { logActivity } from '../db/users';
@@ -12,7 +11,7 @@ export async function startCommand(ctx: Context): Promise<void> {
     '/feedback - Send feedback or report issues\n' +
     '/help - Show help information';
   
-  // Add admin commands if the user is an admin
+
   if (isAdmin) {
     welcomeMessage += '\n\n' +
       '🔐 <b>Admin Commands:</b>\n' +
@@ -26,7 +25,7 @@ export async function startCommand(ctx: Context): Promise<void> {
     await ctx.reply(welcomeMessage);
   }
   
-  // Log the start event
+
   if (ctx.from) {
     logActivity(ctx.from.id, 'start_command');
   }

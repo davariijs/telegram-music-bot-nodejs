@@ -1,4 +1,3 @@
-// commands/index.ts
 export * from './start';
 export * from './help';
 export * from './search';

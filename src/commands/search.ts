@@ -1,4 +1,3 @@
-// commands/search.ts
 import { Context } from 'telegraf';
 
 export async function searchCommand(ctx: Context): Promise<void> {

@@ -1,4 +1,3 @@
-// commands/help.ts
 import { Context } from 'telegraf';
 import { ADMIN_ID } from '../config';
 

@@ -1,11 +1,10 @@
-// index.ts
 import { Telegraf } from 'telegraf';
 import { BOT_TOKEN } from './config';
 import { BotState } from './types';
 import { db } from './db';
 import { trackUser, logActivity } from './db/users';
 
-// Import commands
+// commands
 import { 
   startCommand, 
   helpCommand, 
@@ -14,7 +13,7 @@ import {
   cancelCommand
 } from './commands';
 
-// Import admin commands
+// admin commands
 import { 
   statsCommand, 
   feedbackListCommand,
@@ -22,7 +21,7 @@ import {
   broadcastCommand
 } from './commands';
 
-// Import handlers
+// handlers
 import { 
   handleSearch, 
   handleVideoSelection,
@@ -31,7 +30,7 @@ import {
   handleFeedbackMessage
 } from './handlers';
 
-// Import admin handlers
+// admin handlers
 import { handleBroadcastMessage } from './commands/admin/broadcast';
 
 // Initialize the bot

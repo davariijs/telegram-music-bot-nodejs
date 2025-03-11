@@ -1,4 +1,3 @@
-// commands/feedback.ts
 import { Context } from 'telegraf';
 import { BotState } from '../types';
 

@@ -1,4 +1,3 @@
-// db/users.ts
 import db from './index';
 import { UserStats, CountResult, SearchResult } from '../types';
 
@@ -6,14 +5,14 @@ export function trackUser(userId: number, firstName: string, username: string): 
   const now = new Date().toISOString();
   
   try {
-    // Insert or ignore new user
+
     const insertUser = db.prepare(`
       INSERT OR IGNORE INTO users (id, first_name, username, joined_date, last_active)
       VALUES (?, ?, ?, ?, ?)
     `);
     insertUser.run(userId, firstName || '', username || '', now, now);
     
-    // Update last active timestamp
+
     const updateActivity = db.prepare(`
       UPDATE users SET last_active = ? WHERE id = ?
     `);

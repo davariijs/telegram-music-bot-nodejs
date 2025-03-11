@@ -1,4 +1,3 @@
-// handlers/search.ts
 import { Context, Markup } from 'telegraf';
 import { CallbackQuery } from 'telegraf/types';
 import { BotState, SearchResultItem, DownloadResult } from '../types';
@@ -7,7 +6,6 @@ import { logActivity } from '../db/users';
 import { sendFileAndCleanup } from '../utils/file';
 import * as fs from 'fs';
 
-// Type guard to check if CallbackQuery has data property
 function isDataCallbackQuery(query: CallbackQuery): query is CallbackQuery.DataQuery {
   return 'data' in query;
 }

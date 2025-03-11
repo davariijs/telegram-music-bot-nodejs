@@ -1,4 +1,3 @@
-// db/schema.ts
 export const SCHEMA = `
   CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY,

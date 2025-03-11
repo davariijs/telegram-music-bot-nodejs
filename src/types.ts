@@ -1,4 +1,3 @@
-// types.ts
 export interface VideoFormat {
   format_id: string;
   height: number;
@@ -44,7 +43,7 @@ export interface UserSession {
   videoFormats?: VideoFormat[] | null;
 }
 
-// Define a global state object
+
 export interface BotState {
   sessions: Map<number, UserSession>;
   feedbackState: Map<number, string>;

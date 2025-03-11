@@ -1,4 +1,3 @@
-// utils/formatting.ts
 export function escapeHTML(text: string): string {
   return text
     .replace(/&/g, '&amp;')

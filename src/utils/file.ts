@@ -1,4 +1,3 @@
-// utils/file.ts
 import * as fs from 'fs';
 import { promisify } from 'util';
 import { DOWNLOADS_DIR } from '../config';
@@ -44,20 +43,9 @@ export async function sendFileAndCleanup(filePath: string, sendFunction: (filePa
         } catch (retryError) {
           console.error(`Failed to delete file ${filePath} on retry:`, retryError);
         }
-      }, 5000); // Try again after 5 seconds
+      }, 5000);
     }
   } catch (error) {
     console.error('Error in sendFileAndCleanup:', error);
-  }
-}
-
-// Helper function to get file size
-export function getFileSizeInMB(filePath: string): number {
-  try {
-    const stats = fs.statSync(filePath);
-    return stats.size / (1024 * 1024); // Convert bytes to MB
-  } catch (error) {
-    console.error('Error getting file size:', error);
-    return 0;
   }
 }

@@ -1,4 +1,3 @@
-// db/feedback.ts
 import db from './index';
 import { FeedbackMessage, CountResult } from '../types';
 

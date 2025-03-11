@@ -1,4 +1,3 @@
-// handlers/feedback.ts
 import { Context } from 'telegraf';
 import { BotState } from '../types';
 import { saveFeedback } from '../db/feedback';
@@ -12,7 +11,7 @@ export async function handleFeedbackMessage(ctx: Context, state: BotState, bot: 
     return false;
   }
   
-  // Check if message exists and is text
+
   if (!ctx.message || !('text' in ctx.message)) {
     await ctx.reply('Please send a text message for your feedback.');
     return true;
@@ -20,11 +19,10 @@ export async function handleFeedbackMessage(ctx: Context, state: BotState, bot: 
   
   const feedbackText = ctx.message.text;
   
-  // Store feedback in database
+
   try {
     const feedbackId = saveFeedback(userId, feedbackText);
-    
-    // Notify admin if configured
+
     if (ADMIN_ID) {
       const userInfo = ctx.from.username 
         ? `@${ctx.from.username}` 
@@ -49,7 +47,7 @@ export async function handleFeedbackMessage(ctx: Context, state: BotState, bot: 
     await ctx.reply('Error saving your feedback. Please try again later.');
   }
   
-  // Reset feedback state
+
   state.feedbackState.delete(userId);
   return true;
 }
