@@ -20,6 +20,8 @@ node_modules/
 
 
 cookies.txt
+--ffmpeg-location
+bot_stats.db
 
 # misc
 .DS_Store
