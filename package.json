@@ -1,7 +1,7 @@
 {
   "name": "telegram-music-bot-nodejs",
   "version": "1.0.0",
-  "description": "Music bot with node.js",
+  "description": "Music bot with node.js & typescript",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
