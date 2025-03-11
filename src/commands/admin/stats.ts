@@ -1,4 +1,3 @@
-// commands/admin/stats.ts
 import { Context } from 'telegraf';
 import { ADMIN_ID } from '../../config';
 import { getUserStats } from '../../db/users';

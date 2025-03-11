@@ -1,4 +1,3 @@
-// commands/admin/feedback-list.ts
 import { Context } from 'telegraf';
 import { ADMIN_ID } from '../../config';
 import { getPendingFeedback } from '../../db/feedback';

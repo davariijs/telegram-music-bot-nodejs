@@ -1,4 +1,3 @@
-// commands/admin/broadcast.ts
 import { Context, Telegraf } from 'telegraf';
 import { ADMIN_ID } from '../../config';
 import { BotState } from '../../types';

@@ -1,4 +1,3 @@
-// commands/admin/reply.ts
 import { Context } from 'telegraf';
 import { ADMIN_ID } from '../../config';
 import { getFeedbackById, saveReply } from '../../db/feedback';
