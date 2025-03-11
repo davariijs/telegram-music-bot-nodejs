@@ -1,7 +1,0 @@
-{
-    "start_message": "Welcome! 🎵 I can help you download music and videos from YouTube.\n\nJust send me a song name or artist to search, or use these commands:\n/search - Search for videos\n/feedback - Send feedback or report issues\n/help - Show help information",
-    "help_message": "Use /search to find a song and /feedback to share your thoughts.",
-    "search_prompt": "Type the song name to search:",
-    "language_changed": "Your language has been changed to English. 🇬🇧",
-    "error_message": "An unexpected error occurred. Please try again."
-  }
