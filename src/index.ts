@@ -123,20 +123,24 @@ bot.catch((err, ctx) => {
   ctx.reply('Something went wrong. Please try again later.');
 });
 
+// Launch the bot
+bot.launch()
+  .then(() => console.log('Bot started successfully!'))
+  .catch(err => console.error('Failed to start bot:', err));
+
+
+import * as http from 'http';
+const server = http.createServer((req, res) => {
+  res.writeHead(200);
+  res.end('Bot is running!');
+});
+server.listen(3000, () => {
+  console.log('Keep-alive server running on port 3000');
+});
+
 // Graceful shutdown
 process.once('SIGINT', () => {
   bot.stop('SIGINT');
   db.close();
   console.log('Bot stopped and database connection closed');
 });
-
-process.once('SIGTERM', () => {
-  bot.stop('SIGTERM');
-  db.close();
-  console.log('Bot stopped and database connection closed');
-});
-
-// Launch the bot
-bot.launch()
-  .then(() => console.log('Bot started successfully!'))
-  .catch(err => console.error('Failed to start bot:', err));
