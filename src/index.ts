@@ -3,7 +3,7 @@ import { BOT_TOKEN } from './config';
 import { BotState } from './types';
 import { db } from './db';
 import { trackUser, logActivity } from './db/users';
-
+import * as http from 'http';
 // commands
 import { 
   startCommand, 
@@ -129,7 +129,7 @@ bot.launch()
   .catch(err => console.error('Failed to start bot:', err));
 
 
-import * as http from 'http';
+
 const server = http.createServer((req, res) => {
   res.writeHead(200);
   res.end('Bot is running!');
